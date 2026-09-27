@@ -1,0 +1,580 @@
+- description: "TC-CPP-001 - Null pointer dereference"
+  vars:
+    requirements: |
+      getUserName() must safely handle the case where findUser() does not
+      find a user. The function must not dereference a null pointer.
+    context: |
+      findUser(int id) may return nullptr when the user does not exist.
+    code: |
+      class UserManager {
+      public:
+          User* findUser(int id);
+
+          std::string getUserName(int id) {
+              User* user = findUser(id);
+              return user->name;
+          }
+      };
+    expected_findings: |
+      The reviewer should identify that findUser() may return nullptr and
+      user->name dereferences the pointer without checking it.
+    forbidden_findings: |
+      Do not claim that the code has a memory leak or double-free unless
+      there is evidence supporting that claim.
+  assert:
+    - type: contains-any
+      value:
+        - "nullptr"
+        - "null pointer"
+        - "null dereference"
+        - "null pointer dereference"
+    - type: llm-rubric
+      value: |
+        The review must correctly identify the null pointer dereference.
+        The reviewer must explain that findUser() may return nullptr and
+        that user->name dereferences the pointer without checking it.
+        A suggested fix should include checking the pointer before
+        dereferencing it or otherwise handling the not-found case.
+
+- description: "TC-CPP-002 - Iterator invalidation"
+  vars:
+    requirements: |
+      Remove every expired Item from the vector safely.
+    context: |
+      items is a std::vector<Item>. The implementation must continue
+      iterating correctly after removing an element.
+    code: |
+      void removeExpired(std::vector<Item>& items) {
+          for (auto it = items.begin(); it != items.end(); ++it) {
+              if (it->expired()) {
+                  items.erase(it);
+              }
+          }
+      }
+    expected_findings: |
+      The reviewer should identify iterator invalidation caused by
+      incrementing an iterator after erase().
+    forbidden_findings: |
+      Do not claim that vector::erase() is always unsafe. The issue is
+      specifically the incorrect handling of the iterator after erase().
+  assert:
+    - type: contains-any
+      value:
+        - "iterator invalidation"
+        - "invalidated iterator"
+        - "erase"
+    - type: llm-rubric
+      value: |
+        The review must identify that std::vector::erase() invalidates
+        the iterator being erased and that the loop subsequently performs
+        ++it on an invalid iterator.
+        A correct fix should use the iterator returned by erase(), for example:
+        it = items.erase(it);
+        and only increment the iterator in the non-erase branch.
+
+- description: "TC-CPP-003 - Exception safety and resource leak"
+  vars:
+    requirements: |
+      process() must release the File resource regardless of whether
+      initialization or configuration loading succeeds.
+    context: |
+      openFile() returns a dynamically managed File pointer that must
+      eventually be closed with closeFile().
+      initialize() and loadConfig() may throw exceptions.
+    code: |
+      void process() {
+          File* file = openFile();
+          initialize();
+          if (!loadConfig()) {
+              throw std::runtime_error("Invalid config");
+          }
+          closeFile(file);
+      }
+    expected_findings: |
+      The reviewer should identify that exceptions can bypass closeFile(file),
+      causing the resource to remain open.
+    forbidden_findings: |
+      Do not claim that closeFile(file) is unreachable during the normal
+      successful execution path.
+  assert:
+    - type: contains-any
+      value:
+        - "resource leak"
+        - "resource leak"
+        - "exception"
+        - "exception safety"
+        - "cleanup"
+        - "closeFile"
+    - type: llm-rubric
+      value: |
+        The review must correctly identify the exception-safety problem.
+        If initialize() or loadConfig() throws, closeFile(file) is skipped.
+        If loadConfig() returns false, the explicit throw also skips cleanup.
+        The review should recommend RAII or another exception-safe cleanup
+        mechanism.
+
+- description: "TC-CPP-004 - Incorrect boundary condition"
+  vars:
+    requirements: |
+      An age is valid when it is between 18 and 60 years old, inclusive.
+    context: |
+      Both boundary values 18 and 60 are valid according to the requirement.
+    code: |
+      bool isValidAge(int age) {
+          return age > 18 && age < 60;
+      }
+    expected_findings: |
+      The reviewer should identify that the implementation excludes 18 and 60,
+      even though both values should be accepted.
+    forbidden_findings: |
+      Do not report integer overflow, memory safety, or concurrency issues.
+  assert:
+    - type: contains-any
+      value:
+        - "boundary"
+        - "18"
+        - "60"
+        - "inclusive"
+    - type: llm-rubric
+      value: |
+        The review must identify the boundary-condition bug.
+        The requirement says 18 and 60 are valid, but the implementation
+        uses > 18 and < 60.
+        A correct fix should use >= 18 && <= 60.
+
+- description: "TC-CPP-005 - False positive control: RAII"
+  vars:
+    requirements: |
+      processFile() must safely manage the File resource even when
+      validation fails or an exception is thrown.
+    context: |
+      FileHandle is an RAII type. Its destructor automatically closes
+      the underlying file resource.
+      FileHandle is non-copyable and owns the resource.
+    code: |
+      void processFile(const std::string& path) {
+          FileHandle file(path);
+          process(file);
+          if (!validate(file)) {
+              throw std::runtime_error("Invalid file");
+          }
+      }
+    expected_findings: |
+      There is no resource leak in this code because FileHandle owns the
+      resource and its destructor performs cleanup.
+    forbidden_findings: |
+      Do not report a resource leak merely because the function throws.
+      Do not recommend manually calling close() unless the implementation
+      of FileHandle requires it.
+  assert:
+    - type: llm-rubric
+      value: |
+        This is a negative test.
+        The reviewer should NOT report a resource leak or missing cleanup.
+        The reviewer must recognize that FileHandle uses RAII and that
+        its destructor handles resource cleanup even when an exception
+        is thrown.
+        Reporting only unrelated, evidence-based issues is acceptable,
+        but claiming a resource leak is incorrect.
+
+- description: "TC-CPP-006 - False positive control: synchronized counter"
+  vars:
+    requirements: |
+      Counter must be safe when increment() and get() are called from
+      multiple threads.
+    context: |
+      Multiple threads may access the same Counter instance concurrently.
+      The mutex protects access to count_.
+    code: |
+      class Counter {
+      public:
+          void increment() {
+              std::lock_guard<std::mutex> lock(mutex_);
+              ++count_;
+          }
+
+          int get() const {
+              std::lock_guard<std::mutex> lock(mutex_);
+              return count_;
+          }
+
+      private:
+          mutable std::mutex mutex_;
+          int count_{0};
+      };
+    expected_findings: |
+      There is no data race on count_ because both reads and writes are
+      protected by the same mutex.
+    forbidden_findings: |
+      Do not report a data race on count_.
+      Do not claim that get() is unsafe because it is const; mutex_ is mutable.
+  assert:
+    - type: llm-rubric
+      value: |
+        This is a negative test.
+        The reviewer should NOT report a data race on count_.
+        Both increment() and get() acquire the same mutex before accessing
+        count_.
+        The reviewer should recognize that mutable allows mutex_ to be
+        locked inside the const get() method.
+        A claim of an unsynchronized data race is incorrect.
+
+- description: "TC-CPP-007 - False positive control: non-owning raw pointer"
+  vars:
+    requirements: |
+      processSession() receives a pointer to an active Session and processes
+      it if the pointer is valid.
+    context: |
+      The caller owns the Session object.
+      processSession() does not take ownership and must not delete it.
+      The Session remains alive for the duration of the call.
+    code: |
+      void processSession(Session* activeSession) {
+          if (activeSession == nullptr) return;
+          activeSession->process();
+      }
+    expected_findings: |
+      The raw pointer is intentionally non-owning.
+      There is no memory leak caused by this function.
+    forbidden_findings: |
+      Do not report a memory leak merely because a raw pointer is used.
+      Do not require delete activeSession().
+  assert:
+    - type: llm-rubric
+      value: |
+        This is a negative test.
+        The reviewer should recognize that activeSession is a non-owning
+        pointer and that the caller owns the object.
+        The reviewer must NOT claim that processSession() leaks memory
+        or must delete activeSession.
+        The nullptr check should also be recognized as valid.
+
+- description: "TC-CPP-008 - Use-after-free"
+  vars:
+    requirements: |
+      getName() must return the user's name safely.
+    context: |
+      loadUser() returns a dynamically allocated User object.
+      The caller owns the returned object and must not access it after delete.
+    code: |
+      std::string getName() {
+          User* user = loadUser();
+          delete user;
+          return user->name;
+      }
+    expected_findings: |
+      The reviewer should identify a use-after-free because user->name
+      is accessed after delete user.
+    forbidden_findings: |
+      Do not describe this only as a possible memory leak.
+      The primary issue is accessing an object after its lifetime ended.
+  assert:
+    - type: contains-any
+      value:
+        - "use-after-free"
+        - "use after free"
+        - "dangling pointer"
+        - "after delete"
+        - "freed"
+    - type: llm-rubric
+      value: |
+        The review must identify the use-after-free.
+        delete user ends the lifetime of the User object, but the code
+        subsequently accesses user->name.
+        The reviewer should recommend accessing the data before deletion
+        or changing ownership/lifetime management.
+
+- description: "TC-CPP-009 - Ownership violation"
+  vars:
+    requirements: |
+      SessionManager receives a non-owning Session pointer.
+      SessionManager must not delete the Session.
+    context: |
+      The caller owns the Session object and guarantees that it remains
+      alive while SessionManager is using it.
+    code: |
+      class SessionManager {
+      private:
+          Session* session_;
+
+      public:
+          SessionManager(Session* session) : session_(session) {}
+
+          ~SessionManager() {
+              delete session_;
+          }
+      };
+    expected_findings: |
+      The destructor incorrectly deletes a Session that SessionManager
+      does not own.
+    forbidden_findings: |
+      Do not claim double-free as a definite fact unless another owner
+      is explicitly shown to delete the same object.
+  assert:
+    - type: contains-any
+      value:
+        - "ownership"
+        - "non-owning"
+        - "delete"
+        - "lifetime"
+    - type: llm-rubric
+      value: |
+        The review must identify an ownership violation.
+        The context explicitly states that the caller owns Session.
+        SessionManager must therefore not delete session_.
+        The reviewer should recommend a non-owning representation such as
+        a raw pointer without deletion, reference, or another appropriate
+        ownership design.
+
+- description: "TC-CPP-010 - Data race"
+  vars:
+    requirements: |
+      Counter must support concurrent increment operations safely.
+    context: |
+      t1 and t2 execute concurrently and access the same Counter instance.
+      No external synchronization is provided.
+    code: |
+      class Counter {
+      public:
+          void increment() {
+              ++count_;
+          }
+
+          int get() const {
+              return count_;
+          }
+
+      private:
+          int count_{0};
+      };
+
+      Counter counter;
+
+      std::thread t1([&] {
+          counter.increment();
+      });
+
+      std::thread t2([&] {
+          counter.increment();
+      });
+    expected_findings: |
+      The reviewer should identify an unsynchronized concurrent access
+      to count_, resulting in a data race.
+    forbidden_findings: |
+      Do not claim that std::thread itself is incorrect.
+  assert:
+    - type: contains-any
+      value:
+        - "data race"
+        - "race condition"
+        - "synchron"
+        - "mutex"
+        - "atomic"
+    - type: llm-rubric
+      value: |
+        The review must identify the data race caused by concurrent
+        unsynchronized modifications of count_.
+        The review should recommend protecting count_ with a mutex or
+        using an appropriate atomic type.
+
+- description: "TC-CPP-011 - Incorrect error handling"
+  vars:
+    requirements: |
+      saveConfig() must return false when opening the file or writing the
+      configuration fails.
+    context: |
+      fopen() may return nullptr.
+      fwrite() may fail and return a value smaller than the requested count.
+    code: |
+      bool saveConfig(const Config& config) {
+          FILE* file = fopen("config.dat", "w");
+          fwrite(&config, sizeof(Config), 1, file);
+          fclose(file);
+          return true;
+      }
+    expected_findings: |
+      The reviewer should identify unchecked fopen() and fwrite() results
+      and the unconditional true return.
+    forbidden_findings: |
+      Do not report a concurrency issue unless supported by additional context.
+  assert:
+    - type: contains-any
+      value:
+        - "fopen"
+        - "fwrite"
+        - "return true"
+        - "error handling"
+        - "unchecked"
+        - "return value"
+    - type: llm-rubric
+      value: |
+        The review must identify that fopen() can return nullptr and is
+        not checked before fwrite() or fclose().
+        The review must also identify that fwrite() can fail but its return
+        value is ignored.
+        Returning true unconditionally means failures are incorrectly
+        reported as success.
+
+- description: "TC-CPP-012 - Correct erase pattern"
+  vars:
+    requirements: |
+      Remove all expired items from the vector safely.
+    context: |
+      The implementation must correctly handle iterator invalidation.
+    code: |
+      void removeExpired(std::vector<Item>& items) {
+          for (auto it = items.begin(); it != items.end();) {
+              if (it->expired()) {
+                  it = items.erase(it);
+              } else {
+                  ++it;
+              }
+          }
+      }
+    expected_findings: |
+      There is no iterator invalidation bug in this implementation.
+      The iterator returned by erase() is used correctly.
+    forbidden_findings: |
+      Do not report iterator invalidation caused by erase().
+  assert:
+    - type: llm-rubric
+      value: |
+        This is a negative test.
+        The reviewer should recognize that the erase() return value is
+        assigned back to it and that the iterator is only incremented
+        when no erase occurs.
+        The reviewer must NOT report an iterator invalidation bug.
+
+- description: "TC-CPP-013 - Safe moved-from object"
+  vars:
+    requirements: |
+      enqueue() may move the Message into the queue and then reset the
+      local Message object.
+    context: |
+      After std::move(message), the moved-from Message object remains valid
+      and may be assigned to a new value.
+    code: |
+      void enqueue(Message message, Queue& queue) {
+          queue.push(std::move(message));
+          message = Message{};
+      }
+    expected_findings: |
+      There is no use-after-free or invalid memory access caused by
+      assigning to the moved-from message.
+    forbidden_findings: |
+      Do not report std::move(message) itself as a bug.
+      Do not claim that a moved-from object is automatically invalid.
+  assert:
+    - type: llm-rubric
+      value: |
+        This is a negative test.
+        The reviewer should recognize that a moved-from C++ object remains
+        in a valid but unspecified state and can generally be assigned to.
+        The assignment message = Message{} is valid assuming Message has
+        a valid assignment operator.
+        The reviewer must NOT report this as a use-after-move bug solely
+        because std::move() is used.
+
+- description: "TC-CPP-014 - Safe scoped locking"
+  vars:
+    requirements: |
+      updateCache() and updateMetrics() must execute while holding mutex_,
+      but the mutex should not remain locked longer than necessary.
+    context: |
+      updateCache() and updateMetrics() do not call each other.
+      Both operations require the same mutex.
+    code: |
+      void update() {
+          {
+              std::lock_guard<std::mutex> lock(mutex_);
+              updateCache();
+          }
+
+          {
+              std::lock_guard<std::mutex> lock(mutex_);
+              updateMetrics();
+          }
+      }
+    expected_findings: |
+      The two lock_guard objects have separate scopes.
+      The first lock is released before the second lock is acquired.
+      There is no deadlock merely because the same mutex is locked twice.
+    forbidden_findings: |
+      Do not report a deadlock solely because the same mutex is locked
+      in two separate scopes.
+  assert:
+    - type: llm-rubric
+      value: |
+        This is a negative test.
+        The reviewer should recognize that the first lock_guard is destroyed
+        at the end of its scope before the second lock_guard acquires mutex_.
+        Therefore, there is no double-lock or deadlock caused by these two
+        lock_guard objects.
+
+- description: "TC-CPP-015 - Safe const_cast context"
+  vars:
+    requirements: |
+      updateConfig() must call a legacy API that accepts Config*.
+    context: |
+      The Config object passed to updateConfig() was originally created
+      as a non-const object.
+      legacyUpdate() does not retain the pointer and does not modify the
+      Config object.
+    code: |
+      void updateConfig(const Config& config) {
+          legacyUpdate(const_cast<Config*>(&config));
+      }
+    expected_findings: |
+      const_cast is potentially suspicious, but in the stated context it
+      does not by itself demonstrate undefined behavior.
+    forbidden_findings: |
+      Do not automatically report undefined behavior solely because
+      const_cast is used.
+  assert:
+    - type: llm-rubric
+      value: |
+        This is a negative test for false positives.
+        The reviewer may mention that const_cast is a maintainability or
+        API-design concern, but must NOT claim definite undefined behavior
+        solely because const_cast is used.
+        The context explicitly states that the underlying object was
+        originally non-const and that legacyUpdate() does not modify it.
+
+- description: "TC-CPP-016 - Null pointer and exception combined"
+  vars:
+    requirements: |
+      loadUserName() must safely return the user's name or an error when
+      the user does not exist.
+    context: |
+      findUser() may return nullptr.
+      loadUserName() must also handle exceptions from loadUser().
+    code: |
+      std::string loadUserName(int id) {
+          User* user = findUser(id);
+
+          if (user == nullptr) {
+              throw std::runtime_error("User not found");
+          }
+
+          initializeUser(user);
+
+          return user->name;
+      }
+    expected_findings: |
+      The code correctly checks for nullptr before dereferencing user.
+      No null pointer dereference should be reported.
+      The reviewer should not invent an exception-safety issue without
+      evidence that initializeUser() acquires unmanaged resources.
+    forbidden_findings: |
+      Do not report a null pointer dereference.
+      Do not invent a resource leak based only on the possibility that
+      initializeUser() might throw.
+  assert:
+    - type: llm-rubric
+      value: |
+        This is a false-positive control case.
+        The reviewer must recognize that user is checked against nullptr
+        before user->name is accessed.
+        The reviewer must NOT report a null pointer dereference.
+        The reviewer must also avoid inventing resource-management problems
+        without evidence in the provided code or context.

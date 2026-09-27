@@ -1,0 +1,40 @@
+description: C++ Reviewer Evaluation
+
+prompts:
+  - file://cpp-review-eval/prompts/baseline.txt
+  - file://cpp-review-eval/prompts/cpp-reviewer.txt
+
+tests:
+  - file://cpp-review-eval/tests/cpp-reviewer-4.yaml
+
+# providers:
+#   - id: openai:chat:deepseek-flash
+#     config:
+#       apiBaseUrl: https://api.deepseek.com/v1
+#       apiKeyEnvar: DEEPSEEK_API_KEY
+#       temperature: 0.0
+# # apiKey: ${DEEPSEEK_API_KEY}
+
+# defaultTest:
+#   options:
+#     provider:
+#       id: openai:chat:deepseek-flash
+#       config:
+#         apiBaseUrl: https://api.deepseek.com/v1
+#         apiKeyEnvar: DEEPSEEK_API_KEY
+#         temperature: 0.0
+
+providers:
+  - id: groq:qwen/qwen3.8-27b
+    config:
+      apiKeyEnvar: GROQ_API_KEY
+      temperature: 0.0
+# apiKey: ${DEEPSEEK_API_KEY}
+
+defaultTest:
+  options:
+    provider:
+      id: groq:qwen/qwen3.8-27b
+      config:
+        apiKeyEnvar: GROQ_API_KEY
+        temperature: 0.0

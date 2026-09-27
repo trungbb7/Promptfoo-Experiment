@@ -1,0 +1,199 @@
+- description: "TC-CPP-009 - Benign moved-from object"
+  vars:
+    requirements: |
+      Move the message into the queue. The original message must remain
+      destructible and may be assigned a new value afterward.
+    context: |
+      Message follows normal C++ moved-from semantics.
+    code: |
+      void enqueue(Message message, Queue& queue) {
+          queue.push(std::move(message));
+
+          message = Message{};
+      }
+  assert:
+    - type: llm-rubric
+      value: |
+        Do not report std::move(message) itself as a use-after-move bug.
+        The moved-from object remains valid for destruction and assignment.
+        The review should not claim that message is being incorrectly read
+        after the move.
+
+- description: "TC-CPP-010 - Safe reserve before insertion"
+  vars:
+    requirements: |
+      Add all elements to the vector without invalidating an iterator
+      that is still needed afterward.
+    context: |
+      reserve() is called before elements are inserted.
+    code: |
+      void appendItems(std::vector<Item>& items,
+                       const std::vector<Item>& extra) {
+          items.reserve(items.size() + extra.size());
+
+          auto it = items.begin();
+
+          for (const auto& item : extra) {
+              items.push_back(item);
+          }
+
+          if (it != items.end()) {
+              process(*it);
+          }
+      }
+  assert:
+    - type: llm-rubric
+      value: |
+        Carefully analyze whether iterator invalidation actually occurs.
+        Do not report push_back as automatically invalidating the iterator
+        if the pre-reserved capacity is sufficient. The review should reason
+        about the capacity guarantee rather than flagging a generic vector
+        insertion issue.
+
+- description: "TC-CPP-011 - Scoped lock lifetime"
+  vars:
+    requirements: |
+      Protect shared state from concurrent access.
+    context: |
+      Each critical section must be protected independently.
+    code: |
+      void update() {
+          {
+              std::lock_guard<std::mutex> lock(mutex_);
+              updateCache();
+          }
+
+          {
+              std::lock_guard<std::mutex> lock(mutex_);
+              updateMetrics();
+          }
+      }
+  assert:
+    - type: llm-rubric
+      value: |
+        Do not report a deadlock merely because the same mutex is locked
+        twice in the function. The first lock_guard is destroyed before
+        the second scope begins, so the mutex is not recursively locked.
+        The review may discuss efficiency if justified, but must not claim
+        that this code necessarily deadlocks.
+
+- description: "TC-CPP-012 - Non-owning raw pointer"
+  vars:
+    requirements: |
+      Process the currently active session without taking ownership of it.
+    context: |
+      activeSession is owned by SessionManager and remains alive during
+      the call to processSession().
+    code: |
+      void processSession(Session* activeSession) {
+          if (activeSession == nullptr) {
+              return;
+          }
+
+          activeSession->process();
+      }
+  assert:
+    - type: llm-rubric
+      value: |
+        Do not report a memory leak merely because a raw pointer is used.
+        The function does not own activeSession and does not delete it.
+        The null check and non-owning usage are valid given the stated context.
+
+- description: "TC-CPP-013 - Safe const_cast on originally non-const object"
+  vars:
+    requirements: |
+      Call a legacy API that requires a non-const pointer.
+    context: |
+      The object passed to this function is guaranteed to have originally
+      been created as a non-const Config object and remains mutable.
+      legacyUpdate() does not retain the pointer.
+    code: |
+      void updateConfig(const Config& config) {
+          legacyUpdate(const_cast<Config*>(&config));
+      }
+  assert:
+    - type: llm-rubric
+      value: |
+        Do not automatically classify const_cast as undefined behavior.
+        Given the stated context, the underlying object is originally
+        non-const and the legacy API does not retain the pointer.
+        The reviewer may flag const_cast as a maintainability/API-design
+        concern, but must distinguish that from claiming undefined behavior.
+
+- description: "TC-CPP-014 - RAII protects resource during exception"
+  vars:
+    requirements: |
+      Read the file and process its contents safely even if processing throws.
+    context: |
+      FileHandle is an RAII wrapper whose destructor closes the underlying
+      file descriptor.
+    code: |
+      void processFile(const std::string& path) {
+          FileHandle file(path);
+
+          process(file);
+
+          if (!validate(file)) {
+              throw std::runtime_error("Invalid file");
+          }
+      }
+  assert:
+    - type: llm-rubric
+      value: |
+        Do not report a resource leak merely because an exception can be
+        thrown. FileHandle is explicitly an RAII type and its destructor
+        closes the resource. The resource remains protected during exception
+        unwinding.
+
+- description: "TC-CPP-015 - Synchronized shared state"
+  vars:
+    requirements: |
+      Multiple threads may update count concurrently.
+    context: |
+      count_ is protected by mutex_ for every read and write.
+    code: |
+      class Counter {
+      public:
+          void increment() {
+              std::lock_guard<std::mutex> lock(mutex_);
+              ++count_;
+          }
+
+          int get() const {
+              std::lock_guard<std::mutex> lock(mutex_);
+              return count_;
+          }
+
+      private:
+          mutable std::mutex mutex_;
+          int count_{0};
+      };
+  assert:
+    - type: llm-rubric
+      value: |
+        Do not report a data race on count_. Both reads and writes are
+        protected by the same mutex. The code is synchronized for the
+        operations shown.
+
+- description: "TC-CPP-016 - Correct iterator erase pattern"
+  vars:
+    requirements: |
+      Remove all expired items from the vector.
+    context: |
+      The vector may contain zero or more expired elements.
+    code: |
+      void removeExpired(std::vector<Item>& items) {
+          for (auto it = items.begin(); it != items.end();) {
+              if (it->expired()) {
+                  it = items.erase(it);
+              } else {
+                  ++it;
+              }
+          }
+      }
+  assert:
+    - type: llm-rubric
+      value: |
+        Do not report iterator invalidation as a bug. The code correctly
+        assigns the iterator returned by erase() and only increments the
+        iterator in the non-erasing branch.

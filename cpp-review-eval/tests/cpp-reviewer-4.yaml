@@ -1,0 +1,452 @@
+- description: "TC-CPP-H01 - Dangling std::string_view"
+  vars:
+    requirements: |
+      getUserName() must return a view that remains valid for the caller
+      after the function returns.
+
+    context: |
+      User::name() returns a std::string by value.
+      The returned string is a temporary object.
+
+    code: |
+      std::string_view getUserName(const User& user) {
+          return user.name();
+      }
+
+    expected_findings: |
+      The returned std::string_view refers to the character buffer of a
+      temporary std::string that is destroyed when the function returns.
+      The returned view therefore dangles.
+
+    forbidden_findings: |
+      Do not report a memory leak.
+      Do not claim that std::string_view itself owns the underlying string.
+
+  assert:
+    - type: llm-rubric
+      value: |
+        Evaluate the review against:
+
+        Expected findings:
+        {{expected_findings}}
+
+        Forbidden findings:
+        {{forbidden_findings}}
+
+        The reviewer must identify the lifetime problem caused by returning
+        a string_view referring to a temporary std::string.
+        Merely saying that string_view is "unsafe" is insufficient.
+
+- description: "TC-CPP-H02 - Reference to local object"
+  vars:
+    requirements: |
+      getConfig() must return a valid Config object that remains alive
+      after the function returns.
+
+    context: |
+      The caller expects the returned reference to remain valid.
+
+    code: |
+      const Config& getConfig() {
+          Config config;
+          loadDefaults(config);
+          return config;
+      }
+
+    expected_findings: |
+      The function returns a reference to a local object whose lifetime
+      ends when the function returns. The caller receives a dangling reference.
+
+    forbidden_findings: |
+      Do not report a memory leak.
+      Do not claim that returning const& is inherently incorrect.
+
+  assert:
+    - type: llm-rubric
+      value: |
+        The reviewer must identify that config is a local automatic object
+        and that returning a reference to it creates a dangling reference.
+        The review should explain the lifetime boundary rather than merely
+        saying "reference is unsafe."
+
+- description: "TC-CPP-H03 - Lambda captures local variable by reference"
+  vars:
+    requirements: |
+      createTask() returns a callable that may be executed asynchronously
+      after createTask() has returned.
+
+    context: |
+      The returned lambda can execute much later on a worker thread.
+
+    code: |
+      std::function<void()> createTask() {
+          std::string path = "/tmp/config.dat";
+
+          return [&]() {
+              processFile(path);
+          };
+      }
+
+    expected_findings: |
+      The lambda captures path by reference, but path is destroyed when
+      createTask() returns. Executing the returned lambda later accesses
+      a dangling reference.
+
+    forbidden_findings: |
+      Do not claim that std::function itself causes the bug.
+      Do not report a data race unless supported by the code.
+
+  assert:
+    - type: llm-rubric
+      value: |
+        Identify the dangling-reference capture.
+        The review must connect the lambda lifetime with the lifetime of
+        the local variable path.
+        A valid fix may capture path by value.
+
+- description: "TC-CPP-H04 - reserve does not create elements"
+  vars:
+    requirements: |
+      initializeBuffer() must create count initialized elements in the vector.
+
+    context: |
+      buffer should contain count actual elements after the function returns.
+      The caller expects buffer.size() == count.
+
+    code: |
+      void initializeBuffer(std::vector<int>& buffer, std::size_t count) {
+          buffer.reserve(count);
+
+          for (std::size_t i = 0; i < count; ++i) {
+              buffer[i] = 0;
+          }
+      }
+
+    expected_findings: |
+      reserve() only changes capacity and does not create vector elements.
+      buffer[i] is out-of-bounds because size() remains unchanged.
+
+    forbidden_findings: |
+      Do not claim that reserve() itself invalidates the vector.
+      Do not claim that this is safe merely because capacity is sufficient.
+
+  assert:
+    - type: llm-rubric
+      value: |
+        The reviewer must distinguish vector capacity from vector size.
+        reserve(count) does not create count elements.
+        Accessing buffer[i] without resize() is invalid.
+        A correct fix should use resize(count) or otherwise create elements.
+
+- description: "TC-CPP-H05 - Integer overflow in allocation size"
+  vars:
+    requirements: |
+      allocateBuffer() must allocate enough memory for count objects of
+      elementSize bytes.
+
+    context: |
+      count and elementSize originate from external input.
+      They may be large values.
+
+    code: |
+      void* allocateBuffer(std::uint32_t count,
+                           std::uint32_t elementSize) {
+          std::uint32_t size = count * elementSize;
+          return std::malloc(size);
+      }
+
+    expected_findings: |
+      The multiplication occurs in uint32_t and can overflow before being
+      passed to malloc(). The allocated buffer can therefore be smaller
+      than the required size, potentially leading to a heap buffer overflow.
+
+    forbidden_findings: |
+      Do not claim that malloc itself is inherently unsafe.
+      Do not focus only on checking whether malloc returns nullptr.
+
+  assert:
+    - type: llm-rubric
+      value: |
+        The reviewer must identify the integer overflow risk in
+        count * elementSize before allocation.
+        The review should connect the arithmetic overflow to the possibility
+        of allocating insufficient memory and subsequent memory corruption.
+
+- description: "TC-CPP-H06 - Signed unsigned comparison"
+  vars:
+    requirements: |
+      getItem() should reject negative indexes and return nullptr when
+      index is outside the vector range.
+
+    context: |
+      index comes from external input and may be negative.
+
+    code: |
+      Item* getItem(const std::vector<Item>& items, int index) {
+          if (index >= items.size()) {
+              return nullptr;
+          }
+
+          return const_cast<Item*>(&items[index]);
+      }
+
+    expected_findings: |
+      The comparison between signed int index and unsigned size_type can
+      convert a negative index to a very large unsigned value.
+      Although the comparison rejects many negative values indirectly,
+      the logic is fragile and the subsequent indexing semantics should
+      be explicitly handled.
+      The const_cast also removes constness unnecessarily.
+
+    forbidden_findings: |
+      Do not claim that every signed/unsigned comparison is automatically
+      a runtime bug.
+      Do not claim a definite out-of-bounds access without explaining
+      the conversion and actual control flow.
+
+  assert:
+    - type: llm-rubric
+      value: |
+        Evaluate whether the reviewer demonstrates an understanding of
+        signed/unsigned conversion in the comparison.
+        Also evaluate whether the reviewer notices the unnecessary
+        const_cast and discusses it accurately without claiming that
+        const_cast alone is undefined behavior.
+
+- description: "TC-CPP-H07 - shared_ptr reference cycle"
+  vars:
+    requirements: |
+      Parent and Child objects should be automatically destroyed when no
+      external owner remains.
+
+    context: |
+      Parent owns its Child objects.
+      A Child stores a reference back to its Parent.
+      The ownership graph should not prevent destruction.
+
+    code: |
+      struct Child;
+
+      struct Parent {
+          std::vector<std::shared_ptr<Child>> children;
+      };
+
+      struct Child {
+          std::shared_ptr<Parent> parent;
+      };
+
+      void createGraph() {
+          auto parent = std::make_shared<Parent>();
+          auto child = std::make_shared<Child>();
+
+          parent->children.push_back(child);
+          child->parent = parent;
+      }
+
+    expected_findings: |
+      Parent and Child form a shared_ptr ownership cycle.
+      Parent owns Child through shared_ptr and Child owns Parent through
+      shared_ptr, preventing reference counts from reaching zero.
+
+    forbidden_findings: |
+      Do not claim a raw-pointer dangling reference.
+      Do not claim that shared_ptr automatically prevents all memory leaks.
+
+  assert:
+    - type: llm-rubric
+      value: |
+        The reviewer must identify the cyclic shared_ptr ownership.
+        The explanation should describe why the reference counts cannot
+        reach zero after external references disappear.
+        A weak_ptr for the back-reference is an appropriate fix.
+
+- description: "TC-CPP-H08 - Callback while holding mutex"
+  vars:
+    requirements: |
+      notifyObservers() must notify observers without risking deadlock
+      or lock inversion.
+
+    context: |
+      observer->onUpdate() may call back into the same object.
+      observer->onUpdate() may also acquire other application mutexes.
+
+    code: |
+      void notifyObservers() {
+          std::lock_guard<std::mutex> lock(mutex_);
+
+          for (auto& observer : observers_) {
+              observer->onUpdate();
+          }
+      }
+
+      void onUpdate() {
+          std::lock_guard<std::mutex> lock(mutex_);
+          refresh();
+      }
+
+    expected_findings: |
+      notifyObservers() holds mutex_ while calling external callback code.
+      If onUpdate() is called synchronously on the same object, the
+      non-recursive mutex is acquired again and deadlocks.
+      More generally, calling arbitrary callbacks while holding a mutex
+      creates lock-order and reentrancy risks.
+
+    forbidden_findings: |
+      Do not claim that every callback under a lock necessarily deadlocks.
+      The definite self-reentrant path depends on the callback target.
+
+  assert:
+    - type: llm-rubric
+      value: |
+        The reviewer should identify the callback-under-lock problem.
+        It should explain the concrete reentrant deadlock path shown by
+        onUpdate() and should also mention the broader lock-order/reentrancy
+        risk.
+
+- description: "TC-CPP-H09 - unique_ptr release leak"
+  vars:
+    requirements: |
+      createSession() must either transfer ownership explicitly or ensure
+      the Session is eventually destroyed.
+
+    context: |
+      SessionManager::setSession() does not take ownership.
+      It only stores a non-owning pointer.
+
+    code: |
+      void createSession(SessionManager& manager) {
+          auto session = std::make_unique<Session>();
+
+          manager.setSession(session.release());
+      }
+
+    expected_findings: |
+      release() relinquishes ownership without destroying the Session.
+      Since setSession() does not take ownership, the Session becomes leaked.
+
+    forbidden_findings: |
+      Do not claim that unique_ptr itself leaks memory.
+      The issue is the explicit release() combined with the ownership
+      semantics of setSession().
+
+  assert:
+    - type: llm-rubric
+      value: |
+        The reviewer must trace ownership through release().
+        After release(), unique_ptr no longer owns the Session.
+        Because setSession() is explicitly non-owning, nobody owns the
+        Session and the allocation leaks.
+
+- description: "TC-CPP-H10 - Moved-from object semantic bug"
+  vars:
+    requirements: |
+      sendBatch() must send all messages and then record the number of
+      messages that were sent.
+
+    context: |
+      send() takes ownership of the vector by value.
+      The caller still needs the original message count afterward.
+
+    code: |
+      void sendBatch(std::vector<Message> messages) {
+          send(std::move(messages));
+
+          auditLog("Sent " + std::to_string(messages.size()) + " messages");
+      }
+
+    expected_findings: |
+      After std::move(messages), the vector remains valid but its contents
+      and size are unspecified. Using messages.size() to report the number
+      of messages is therefore logically incorrect.
+
+    forbidden_findings: |
+      Do not claim that accessing a moved-from vector is automatically
+      undefined behavior.
+      Do not claim use-after-free.
+
+  assert:
+    - type: llm-rubric
+      value: |
+        The reviewer must distinguish between memory safety and semantic
+        correctness.
+        The moved-from vector is valid but its size is unspecified.
+        Therefore using messages.size() to report the number sent is not
+        reliable.
+        The reviewer should recommend saving the count before moving.
+
+- description: "TC-CPP-H11 - Exception safety and partial state update"
+  vars:
+    requirements: |
+      updateUsers() must either update all users successfully or leave
+      the database state unchanged.
+
+    context: |
+      saveUser() modifies persistent state and may throw.
+      The operation is expected to provide an all-or-nothing behavior.
+
+    code: |
+      void updateUsers(const std::vector<User>& users) {
+          for (const auto& user : users) {
+              saveUser(user);
+          }
+      }
+
+    expected_findings: |
+      If saveUser() throws after several users have already been saved,
+      the function leaves the system in a partially updated state.
+      This violates the stated all-or-nothing requirement.
+
+    forbidden_findings: |
+      Do not claim that the loop itself is incorrect.
+      Do not claim a memory leak without evidence.
+
+  assert:
+    - type: llm-rubric
+      value: |
+        The reviewer must connect exception behavior with the explicit
+        all-or-nothing requirement.
+        It should identify that earlier successful saveUser() calls are
+        not rolled back if a later call throws.
+        A transaction, rollback, or equivalent exception-safe strategy
+        should be suggested.
+
+- description: "TC-CPP-H12 - Stale check then use"
+  vars:
+    requirements: |
+      removeIfPresent() must remove the same Item that was verified to
+      exist and must not accidentally remove a replacement object.
+
+    context: |
+      Another thread may modify the container between the lookup and erase.
+      The container is otherwise protected by a mutex in individual methods,
+      but removeIfPresent() currently performs the operations separately.
+
+    code: |
+      void removeIfPresent(int id) {
+          if (contains(id)) {
+              unlockForOtherWork();
+
+              erase(id);
+          }
+      }
+
+    expected_findings: |
+      The check-then-act sequence is not atomic. Another thread can remove
+      or replace the item after contains(id) returns and before erase(id).
+      The function may therefore erase a different object or behave
+      inconsistently with the object that was originally checked.
+
+    forbidden_findings: |
+      Do not claim a data race solely from this snippet because individual
+      container methods may be internally synchronized.
+      The key issue is the non-atomic check-then-act sequence.
+
+  assert:
+    - type: llm-rubric
+      value: |
+        The reviewer must identify the check-then-act concurrency problem.
+        It must distinguish this from a simple unsynchronized data race.
+        The important issue is that contains() and erase() are separated,
+        allowing another thread to change the state between them.
+        The fix should make the operation atomic under the appropriate lock
+        or otherwise coordinate the lookup and removal.

@@ -1,0 +1,264 @@
+- description: "TC-CPP-001 - Null pointer dereference"
+  vars:
+    requirements: |
+      Return the user's name for the requested user ID.
+      findUser() may return nullptr when the user does not exist.
+    context: |
+      The function is called by multiple API endpoints.
+    code: |
+      class UserManager {
+      public:
+      User* findUser(int id);
+
+          std::string getUserName(int id) {
+              User* user = findUser(id);
+              return user->name;
+          }
+      };
+
+  assert:
+    - type: contains-any
+      value:
+        - "null pointer"
+        - "nullptr"
+        - "null"
+        - "dereference"
+    - type: llm-rubric
+      value: |
+        The review must identify that findUser(id) may return nullptr
+        and that user->name dereferences the pointer without checking it.
+        The reviewer should explain the resulting safety/correctness risk.
+
+- description: "TC-CPP-002 - Use after free"
+  vars:
+    requirements: |
+      Return the user's name after loading the user.
+    context: |
+      loadUser() dynamically allocates and returns a User object.
+    code: |
+      std::string getName() {
+      User* user = loadUser();
+
+          delete user;
+
+          return user->name;
+      }
+
+  assert:
+    - type: contains-any
+      value:
+        - "use-after-free"
+        - "use after free"
+        - "dangling pointer"
+        - "deleted"
+    - type: llm-rubric
+      value: |
+        The review must identify that user is accessed after delete user.
+        It should explain that this is a use-after-free and results in
+        undefined behavior.
+
+- description: "TC-CPP-003 - Incorrect ownership"
+  vars:
+    requirements: |
+      SessionManager receives a Session owned by its caller.
+      SessionManager must not destroy the Session object.
+    context: |
+      The Session pointer is managed by the caller and remains valid
+      for the lifetime required by the application.
+    code: |
+      class SessionManager {
+      private:
+      Session* session_;
+
+      public:
+          SessionManager(Session* session)
+              : session_(session) {}
+
+          ~SessionManager() {
+              delete session_;
+          }
+      };
+
+  assert:
+    - type: contains-any
+      value:
+        - "ownership"
+        - "double delete"
+        - "double-delete"
+        - "use-after-free"
+        - "delete"
+    - type: llm-rubric
+      value: |
+        The review must recognize that SessionManager incorrectly assumes
+        ownership of session_. Because the caller owns the object,
+        deleting it in the destructor can cause invalid ownership behavior,
+        including double deletion or use-after-free.
+
+- description: "TC-CPP-004 - Iterator invalidation"
+  vars:
+    requirements: |
+      Remove all expired items from the vector.
+    context: |
+      items is a std::vector and erase() may invalidate iterators.
+    code: |
+      void removeExpired(std::vector<Item>& items) {
+      for (auto it = items.begin(); it != items.end(); ++it) {
+      if (it->expired()) {
+      items.erase(it);
+      }
+      }
+      }
+  assert:
+    - type: contains-any
+      value:
+        - "iterator invalidation"
+        - "invalidated iterator"
+        - "erase"
+        - "undefined behavior"
+    - type: llm-rubric
+      value: |
+        The review must identify that erase(it) invalidates the iterator,
+        after which the loop increments it. It should explain the resulting
+        undefined behavior or invalid iterator access and recommend using
+        the iterator returned by erase().
+
+- description: "TC-CPP-005 - Data race"
+  vars:
+    requirements: |
+      Counter::increment() may be called concurrently by multiple threads.
+      Counter must remain thread-safe.
+    context: |
+      The same Counter instance can be shared by multiple worker threads.
+    code: |
+      class Counter {
+      public:
+      void increment() {
+      ++count_;
+      }
+
+          int get() const {
+              return count_;
+          }
+
+      private:
+          int count_{0};
+      };
+
+      Counter counter;
+
+      std::thread t1([&] {
+          counter.increment();
+      });
+
+      std::thread t2([&] {
+          counter.increment();
+      });
+
+  assert:
+    - type: contains-any
+      value:
+        - "data race"
+        - "race condition"
+        - "thread-safe"
+        - "synchronization"
+        - "atomic"
+        - "mutex"
+    - type: llm-rubric
+      value: |
+        The review must identify that multiple threads modify count_
+        concurrently without synchronization, causing a data race and
+        undefined behavior. It should suggest appropriate synchronization,
+        such as std::atomic or a mutex, depending on the design.
+
+- description: "TC-CPP-006 - Resource leak on exception path"
+  vars:
+    requirements: |
+      Open the configuration file, process it, and close the resource.
+      The function must safely handle exceptions.
+    context: |
+      openFile() returns an owned resource that must eventually be closed.
+      initialize() and loadConfig() may throw exceptions.
+    code: |
+      void process() {
+      File* file = openFile();
+
+          initialize();
+
+          if (!loadConfig()) {
+              throw std::runtime_error("Invalid config");
+          }
+
+          closeFile(file);
+      }
+
+  assert:
+    - type: contains-any
+      value:
+        - "resource leak"
+        - "leak"
+        - "exception"
+        - "RAII"
+        - "cleanup"
+    - type: llm-rubric
+      value: |
+        The review must identify that an exception from initialize() or
+        loadConfig() can bypass closeFile(file), causing a resource leak.
+        The review should recommend exception-safe ownership such as RAII
+        or an equivalent cleanup mechanism.
+
+- description: "TC-CPP-007 - Incorrect boundary condition"
+  vars:
+    requirements: |
+      Users from 18 through 60 years old, inclusive, are valid.
+    context: |
+      Age boundaries are inclusive.
+    code: |
+      bool isValidAge(int age) {
+      return age > 18 && age < 60;
+      }
+  assert:
+    - type: contains-any
+      value:
+        - "boundary"
+        - "18"
+        - "60"
+        - "inclusive"
+        - ">= 18"
+        - "<= 60"
+    - type: llm-rubric
+      value: |
+        The review must identify that the implementation excludes ages 18
+        and 60 even though the requirement says the range is inclusive.
+        The review should recommend >= 18 and <= 60.
+
+- description: "TC-CPP-008 - Missing error handling"
+  vars:
+    requirements: |
+      he configuration and return true only when the operation succeeds.
+    context: |
+      fopen() may fail and fwrite() may write fewer bytes than requested.
+    code: |
+      bool saveConfig(const Config& config) {
+      FILE* file = fopen("config.dat", "w");
+
+          fwrite(&config, sizeof(Config), 1, file);
+
+          fclose(file);
+
+          return true;
+      }
+
+  assert:
+    - type: contains-any
+      value:
+        - "fopen"
+        - "nullptr"
+        - "null"
+        - "fwrite"
+        - "error"
+        - "return value"
+    - type: llm-rubric
+      value: |
+        The review must identify at least the unchecked fopen() failure.
+        A strong review should also identify that fwrite()'s result is ignored
+        and that the function can return true even when writing fails.
